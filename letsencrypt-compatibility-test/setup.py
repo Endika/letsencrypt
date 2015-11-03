@@ -9,7 +9,6 @@ version = '0.1.0.dev0'
 install_requires = [
     'letsencrypt=={0}'.format(version),
     'letsencrypt-apache=={0}'.format(version),
-    'letsencrypt-nginx=={0}'.format(version),
     'docker-py',
     'zope.interface',
 ]
@@ -39,6 +38,7 @@ setup(
         'License :: OSI Approved :: Apache Software License',
         'Programming Language :: Python',
         'Programming Language :: Python :: 2',
+        'Programming Language :: Python :: 2.6',
         'Programming Language :: Python :: 2.7',
         'Topic :: Internet :: WWW/HTTP',
         'Topic :: Security',
