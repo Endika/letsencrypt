@@ -28,17 +28,16 @@ class TLSServerTest(unittest.TestCase):
         server.server_close()  # pylint: disable=no-member
 
 
-class DVSNIServerTest(unittest.TestCase):
-    """Test for acme.standalone.DVSNIServer."""
+class TLSSNI01ServerTest(unittest.TestCase):
+    """Test for acme.standalone.TLSSNI01Server."""
 
     def setUp(self):
-        self.certs = {
-            b'localhost': (test_util.load_pyopenssl_private_key('rsa512_key.pem'),
-                           # pylint: disable=protected-access
-                           test_util.load_cert('cert.pem')._wrapped),
-        }
-        from acme.standalone import DVSNIServer
-        self.server = DVSNIServer(("", 0), certs=self.certs)
+        self.certs = {b'localhost': (
+            test_util.load_pyopenssl_private_key('rsa512_key.pem'),
+            test_util.load_cert('cert.pem'),
+        )}
+        from acme.standalone import TLSSNI01Server
+        self.server = TLSSNI01Server(("", 0), certs=self.certs)
         # pylint: disable=no-member
         self.thread = threading.Thread(target=self.server.serve_forever)
         self.thread.start()
@@ -49,7 +48,8 @@ class DVSNIServerTest(unittest.TestCase):
 
     def test_it(self):
         host, port = self.server.socket.getsockname()[:2]
-        cert = crypto_util.probe_sni(b'localhost', host=host, port=port, timeout=1)
+        cert = crypto_util.probe_sni(
+            b'localhost', host=host, port=port, timeout=1)
         self.assertEqual(jose.ComparableX509(cert),
                          jose.ComparableX509(self.certs[b'localhost'][1]))
 
@@ -106,8 +106,8 @@ class HTTP01ServerTest(unittest.TestCase):
         self.assertFalse(self._test_http01(add=False))
 
 
-class TestSimpleDVSNIServer(unittest.TestCase):
-    """Tests for acme.standalone.simple_dvsni_server."""
+class TestSimpleTLSSNI01Server(unittest.TestCase):
+    """Tests for acme.standalone.simple_tls_sni_01_server."""
 
     def setUp(self):
         # mirror ../examples/standalone
@@ -118,12 +118,14 @@ class TestSimpleDVSNIServer(unittest.TestCase):
         shutil.copy(test_util.vector_path('rsa512_key.pem'),
                     os.path.join(localhost_dir, 'key.pem'))
 
-        from acme.standalone import simple_dvsni_server
+        from acme.standalone import simple_tls_sni_01_server
         self.port = 1234
-        self.thread = threading.Thread(target=simple_dvsni_server, kwargs={
-            'cli_args': ('xxx', '--port', str(self.port)),
-            'forever': False,
-        })
+        self.thread = threading.Thread(
+            target=simple_tls_sni_01_server, kwargs={
+                'cli_args': ('xxx', '--port', str(self.port)),
+                'forever': False,
+            },
+        )
         self.old_cwd = os.getcwd()
         os.chdir(self.test_cwd)
         self.thread.start()
@@ -138,13 +140,14 @@ class TestSimpleDVSNIServer(unittest.TestCase):
         while max_attempts:
             max_attempts -= 1
             try:
-                cert = crypto_util.probe_sni(b'localhost', b'0.0.0.0', self.port)
+                cert = crypto_util.probe_sni(
+                    b'localhost', b'0.0.0.0', self.port)
             except errors.Error:
                 self.assertTrue(max_attempts > 0, "Timeout!")
                 time.sleep(1)  # wait until thread starts
             else:
                 self.assertEqual(jose.ComparableX509(cert),
-                                 test_util.load_cert('cert.pem'))
+                                 test_util.load_comparable_cert('cert.pem'))
                 break
 
 

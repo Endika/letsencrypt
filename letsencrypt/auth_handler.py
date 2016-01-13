@@ -344,8 +344,8 @@ def challb_to_achall(challb, account_key, domain):
     chall = challb.chall
     logger.info("%s challenge for %s", chall.typ, domain)
 
-    if isinstance(chall, challenges.DVSNI):
-        return achallenges.DVSNI(
+    if isinstance(chall, challenges.KeyAuthorizationChallenge):
+        return achallenges.KeyAuthorizationAnnotatedChallenge(
             challb=challb, domain=domain, account_key=account_key)
     elif isinstance(chall, challenges.DNS):
         return achallenges.DNS(challb=challb, domain=domain)
@@ -355,9 +355,6 @@ def challb_to_achall(challb, account_key, domain):
     elif isinstance(chall, challenges.ProofOfPossession):
         return achallenges.ProofOfPossession(
             challb=challb, domain=domain)
-    elif isinstance(chall, challenges.KeyAuthorizationChallenge):
-        return achallenges.KeyAuthorizationAnnotatedChallenge(
-            challb=challb, domain=domain, account_key=account_key)
     else:
         raise errors.Error(
             "Received unsupported challenge of type: %s", chall.typ)
@@ -543,16 +540,11 @@ def _generate_failed_chall_msg(failed_achalls):
 
     """
     typ = failed_achalls[0].error.typ
-    msg = [
-        "The following '{0}' errors were reported by the server:".format(typ)]
+    msg = ["The following errors were reported by the server:"]
 
-    problems = dict()
     for achall in failed_achalls:
-        problems.setdefault(achall.error.description, set()).add(achall.domain)
-    for problem in problems:
-        msg.append("\n\nDomains: ")
-        msg.append(", ".join(sorted(problems[problem])))
-        msg.append("\nError: {0}".format(problem))
+        msg.append("\n\nDomain: %s\nType:   %s\nDetail: %s" % (
+            achall.domain, achall.error.typ, achall.error.detail))
 
     if typ in _ERROR_HELP:
         msg.append("\n\n")

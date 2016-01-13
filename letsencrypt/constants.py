@@ -16,21 +16,23 @@ CLI_DEFAULTS = dict(
                      "letsencrypt", "cli.ini"),
     ],
     verbose_count=-(logging.WARNING / 10),
-    server="https://acme-staging.api.letsencrypt.org/directory",
+    server="https://acme-v01.api.letsencrypt.org/directory",
     rsa_key_size=2048,
     rollback_checkpoints=1,
     config_dir="/etc/letsencrypt",
     work_dir="/var/lib/letsencrypt",
     logs_dir="/var/log/letsencrypt",
     no_verify_ssl=False,
-    dvsni_port=challenges.DVSNI.PORT,
+    http01_port=challenges.HTTP01Response.PORT,
+    tls_sni_01_port=challenges.TLSSNI01Response.PORT,
 
     auth_cert_path="./cert.pem",
     auth_chain_path="./chain.pem",
     strict_permissions=False,
 )
-"""Defaults for CLI flags and `.IConfig` attributes."""
+STAGING_URI = "https://acme-staging.api.letsencrypt.org/directory"
 
+"""Defaults for CLI flags and `.IConfig` attributes."""
 
 RENEWER_DEFAULTS = dict(
     renewer_enabled="yes",
@@ -41,7 +43,7 @@ RENEWER_DEFAULTS = dict(
 
 
 EXCLUSIVE_CHALLENGES = frozenset([frozenset([
-    challenges.DVSNI, challenges.HTTP01])])
+    challenges.TLSSNI01, challenges.HTTP01])])
 """Mutually exclusive challenges."""
 
 

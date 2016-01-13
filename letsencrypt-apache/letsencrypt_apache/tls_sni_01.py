@@ -1,28 +1,31 @@
-"""ApacheDVSNI"""
+"""A class that performs TLS-SNI-01 challenges for Apache"""
+
 import os
+import logging
 
 from letsencrypt.plugins import common
 
 from letsencrypt_apache import obj
 from letsencrypt_apache import parser
 
+logger = logging.getLogger(__name__)
 
-class ApacheDvsni(common.Dvsni):
-    """Class performs DVSNI challenges within the Apache configurator.
+class ApacheTlsSni01(common.TLSSNI01):
+    """Class that performs TLS-SNI-01 challenges within the Apache configurator
 
     :ivar configurator: ApacheConfigurator object
     :type configurator: :class:`~apache.configurator.ApacheConfigurator`
 
-    :ivar list achalls: Annotated :class:`~letsencrypt.achallenges.DVSNI`
-        challenges.
+    :ivar list achalls: Annotated TLS-SNI-01
+        (`.KeyAuthorizationAnnotatedChallenge`) challenges.
 
     :param list indices: Meant to hold indices of challenges in a
-        larger array. ApacheDvsni is capable of solving many challenges
+        larger array. ApacheTlsSni01 is capable of solving many challenges
         at once which causes an indexing issue within ApacheConfigurator
         who must return all responses in order.  Imagine ApacheConfigurator
         maintaining state about where all of the http-01 Challenges,
-        Dvsni Challenges belong in the response array.  This is an optional
-        utility.
+        TLS-SNI-01 Challenges belong in the response array.  This is an
+        optional utility.
 
     :param str challenge_conf: location of the challenge config file
 
@@ -46,14 +49,14 @@ class ApacheDvsni(common.Dvsni):
 """
 
     def __init__(self, *args, **kwargs):
-        super(ApacheDvsni, self).__init__(*args, **kwargs)
+        super(ApacheTlsSni01, self).__init__(*args, **kwargs)
 
         self.challenge_conf = os.path.join(
-            self.configurator.conf("server-root"),
-            "le_dvsni_cert_challenge.conf")
+            self.configurator.conf("challenge-location"),
+            "le_tls_sni_01_cert_challenge.conf")
 
     def perform(self):
-        """Perform a DVSNI challenge."""
+        """Perform a TLS-SNI-01 challenge."""
         if not self.achalls:
             return []
         # Save any changes to the configuration as a precaution
@@ -62,7 +65,7 @@ class ApacheDvsni(common.Dvsni):
 
         # Prepare the server for HTTPS
         self.configurator.prepare_server_https(
-            str(self.configurator.config.dvsni_port), True)
+            str(self.configurator.config.tls_sni_01_port), True)
 
         responses = []
 
@@ -71,8 +74,8 @@ class ApacheDvsni(common.Dvsni):
             responses.append(self._setup_challenge_cert(achall))
 
         # Setup the configuration
-        dvsni_addrs = self._mod_config()
-        self.configurator.make_addrs_sni_ready(dvsni_addrs)
+        addrs = self._mod_config()
+        self.configurator.make_addrs_sni_ready(addrs)
 
         # Save reversible changes
         self.configurator.save("SNI Challenge", True)
@@ -84,16 +87,16 @@ class ApacheDvsni(common.Dvsni):
 
         Result: Apache config includes virtual servers for issued challs
 
-        :returns: All DVSNI addresses used
+        :returns: All TLS-SNI-01 addresses used
         :rtype: set
 
         """
-        dvsni_addrs = set()
+        addrs = set()
         config_text = "<IfModule mod_ssl.c>\n"
 
         for achall in self.achalls:
-            achall_addrs = self.get_dvsni_addrs(achall)
-            dvsni_addrs.update(achall_addrs)
+            achall_addrs = self._get_addrs(achall)
+            addrs.update(achall_addrs)
 
             config_text += self._get_config_text(achall, achall_addrs)
 
@@ -103,32 +106,33 @@ class ApacheDvsni(common.Dvsni):
         self.configurator.reverter.register_file_creation(
             True, self.challenge_conf)
 
+        logger.debug("writing a config file with text: %s", config_text)
         with open(self.challenge_conf, "w") as new_conf:
             new_conf.write(config_text)
 
-        return dvsni_addrs
+        return addrs
 
-    def get_dvsni_addrs(self, achall):
-        """Return the Apache addresses needed for DVSNI."""
-        vhost = self.configurator.choose_vhost(achall.domain)
-
+    def _get_addrs(self, achall):
+        """Return the Apache addresses needed for TLS-SNI-01."""
+        vhost = self.configurator.choose_vhost(achall.domain, temp=True)
         # TODO: Checkout _default_ rules.
-        dvsni_addrs = set()
-        default_addr = obj.Addr(("*", str(self.configurator.config.dvsni_port)))
+        addrs = set()
+        default_addr = obj.Addr(("*", str(
+            self.configurator.config.tls_sni_01_port)))
 
         for addr in vhost.addrs:
             if "_default_" == addr.get_addr():
-                dvsni_addrs.add(default_addr)
+                addrs.add(default_addr)
             else:
-                dvsni_addrs.add(
-                    addr.get_sni_addr(self.configurator.config.dvsni_port))
+                addrs.add(
+                    addr.get_sni_addr(self.configurator.config.tls_sni_01_port))
 
-        return dvsni_addrs
+        return addrs
 
     def _conf_include_check(self, main_config):
-        """Adds DVSNI challenge conf file into configuration.
+        """Add TLS-SNI-01 challenge conf file into configuration.
 
-        Adds DVSNI challenge include file if it does not already exist
+        Adds TLS-SNI-01 challenge include file if it does not already exist
         within mainConfig
 
         :param str main_config: file path to main user apache config file
@@ -144,8 +148,8 @@ class ApacheDvsni(common.Dvsni):
     def _get_config_text(self, achall, ip_addrs):
         """Chocolate virtual server configuration text
 
-        :param achall: Annotated DVSNI challenge.
-        :type achall: :class:`letsencrypt.achallenges.DVSNI`
+        :param .KeyAuthorizationAnnotatedChallenge achall: Annotated
+            TLS-SNI-01 challenge.
 
         :param list ip_addrs: addresses of challenged domain
             :class:`list` of type `~.obj.Addr`
@@ -156,7 +160,7 @@ class ApacheDvsni(common.Dvsni):
         """
         ips = " ".join(str(i) for i in ip_addrs)
         document_root = os.path.join(
-            self.configurator.config.work_dir, "dvsni_page/")
+            self.configurator.config.work_dir, "tls_sni_01_page/")
         # TODO: Python docs is not clear how mutliline string literal
         # newlines are parsed on different platforms. At least on
         # Linux (Debian sid), when source file uses CRLF, Python still
@@ -164,7 +168,7 @@ class ApacheDvsni(common.Dvsni):
         # https://docs.python.org/2.7/reference/lexical_analysis.html
         return self.VHOST_TEMPLATE.format(
             vhost=ips,
-            server_name=achall.gen_response(achall.account_key).z_domain,
+            server_name=achall.response(achall.account_key).z_domain,
             ssl_options_conf_path=self.configurator.mod_ssl_conf,
             cert_path=self.get_cert_path(achall),
             key_path=self.get_key_path(achall),

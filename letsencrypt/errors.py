@@ -57,13 +57,17 @@ class DvAuthError(AuthorizationError):
 
 
 # Authenticator - Challenge specific errors
-class DvsniError(DvAuthError):
-    """Let's Encrypt DVSNI error."""
+class TLSSNI01Error(DvAuthError):
+    """Let's Encrypt TLSSNI01 error."""
 
 
 # Plugin Errors
 class PluginError(Error):
     """Let's Encrypt Plugin error."""
+
+
+class PluginEnhancementAlreadyPresent(Error):
+    """ Enhancement was already set """
 
 
 class PluginSelectionError(Error):
@@ -94,3 +98,7 @@ class StandaloneBindError(Error):
             "Problem binding to port {0}: {1}".format(port, socket_error))
         self.socket_error = socket_error
         self.port = port
+
+
+class ConfigurationError(Error):
+    """Configuration sanity error."""

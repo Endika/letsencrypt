@@ -1,10 +1,9 @@
 """Crypto utilities."""
 import contextlib
 import logging
+import re
 import socket
 import sys
-
-from six.moves import range  # pylint: disable=import-error,redefined-builtin
 
 import OpenSSL
 
@@ -13,7 +12,7 @@ from acme import errors
 
 logger = logging.getLogger(__name__)
 
-# DVSNI certificate serving and probing is not affected by SSL
+# TLSSNI01 certificate serving and probing is not affected by SSL
 # vulnerabilities: prober needs to check certificate for expected
 # contents anyway. Working SNI is the only thing that's necessary for
 # the challenge and thus scoping down SSL/TLS method (version) would
@@ -23,7 +22,7 @@ logger = logging.getLogger(__name__)
 # https://www.openssl.org/docs/ssl/SSLv23_method.html). _serve_sni
 # should be changed to use "set_options" to disable SSLv2 and SSLv3,
 # in case it's used for things other than probing/serving!
-_DEFAULT_DVSNI_SSL_METHOD = OpenSSL.SSL.SSLv23_METHOD
+_DEFAULT_TLSSNI01_SSL_METHOD = OpenSSL.SSL.SSLv23_METHOD
 
 
 class SSLSocket(object):  # pylint: disable=too-few-public-methods
@@ -35,7 +34,7 @@ class SSLSocket(object):  # pylint: disable=too-few-public-methods
     :ivar method: See `OpenSSL.SSL.Context` for allowed values.
 
     """
-    def __init__(self, sock, certs, method=_DEFAULT_DVSNI_SSL_METHOD):
+    def __init__(self, sock, certs, method=_DEFAULT_TLSSNI01_SSL_METHOD):
         self.sock = sock
         self.certs = certs
         self.method = method
@@ -70,7 +69,7 @@ class SSLSocket(object):  # pylint: disable=too-few-public-methods
     class FakeConnection(object):
         """Fake OpenSSL.SSL.Connection."""
 
-        # pylint: disable=missing-docstring
+        # pylint: disable=too-few-public-methods,missing-docstring
 
         def __init__(self, connection):
             self._wrapped = connection
@@ -103,7 +102,7 @@ class SSLSocket(object):  # pylint: disable=too-few-public-methods
 
 
 def probe_sni(name, host, port=443, timeout=300,
-              method=_DEFAULT_DVSNI_SSL_METHOD, source_address=('0', 0)):
+              method=_DEFAULT_TLSSNI01_SSL_METHOD, source_address=('0', 0)):
     """Probe SNI server for SSL certificate.
 
     :param bytes name: Byte string to send as the server name in the
@@ -161,31 +160,31 @@ def _pyopenssl_cert_or_req_san(cert_or_req):
     :rtype: `list` of `unicode`
 
     """
-    # constants based on implementation of
-    # OpenSSL.crypto.X509Error._subjectAltNameString
-    parts_separator = ", "
+    # This function finds SANs by dumping the certificate/CSR to text and
+    # searching for "X509v3 Subject Alternative Name" in the text. This method
+    # is used to support PyOpenSSL version 0.13 where the
+    # `_subjectAltNameString` and `get_extensions` methods are not available
+    # for CSRs.
+
+    # constants based on PyOpenSSL certificate/CSR text dump
     part_separator = ":"
-    extension_short_name = b"subjectAltName"
+    parts_separator = ", "
+    prefix = "DNS" + part_separator
 
-    if hasattr(cert_or_req, 'get_extensions'):  # X509Req
-        extensions = cert_or_req.get_extensions()
-    else:  # X509
-        extensions = [cert_or_req.get_extension(i)
-                      for i in range(cert_or_req.get_extension_count())]
-
-    # pylint: disable=protected-access,no-member
-    label = OpenSSL.crypto.X509Extension._prefixes[OpenSSL.crypto._lib.GEN_DNS]
-    assert parts_separator not in label
-    prefix = label + part_separator
-
-    san_extensions = [
-        ext._subjectAltNameString().split(parts_separator)
-        for ext in extensions if ext.get_short_name() == extension_short_name]
+    if isinstance(cert_or_req, OpenSSL.crypto.X509):
+        func = OpenSSL.crypto.dump_certificate
+    else:
+        func = OpenSSL.crypto.dump_certificate_request
+    text = func(OpenSSL.crypto.FILETYPE_TEXT, cert_or_req).decode("utf-8")
+    # WARNING: this function does not support multiple SANs extensions.
+    # Multiple X509v3 extensions of the same type is disallowed by RFC 5280.
+    match = re.search(r"X509v3 Subject Alternative Name:\s*(.*)", text)
     # WARNING: this function assumes that no SAN can include
     # parts_separator, hence the split!
+    sans_parts = [] if match is None else match.group(1).split(parts_separator)
 
-    return [part.split(part_separator)[1] for parts in san_extensions
-            for part in parts if part.startswith(prefix)]
+    return [part.split(part_separator)[1]
+            for part in sans_parts if part.startswith(prefix)]
 
 
 def gen_ss_cert(key, domains, not_before=None,

@@ -65,8 +65,14 @@ Testing
 
 The following tools are there to help you:
 
-- ``tox`` starts a full set of tests. Please make sure you run it
-  before submitting a new pull request.
+- ``tox`` starts a full set of tests. Please note that it includes
+  apacheconftest, which uses the system's Apache install to test config file
+  parsing, so it should only be run on systems that have an
+  experimental, non-production Apache2 install on them.  ``tox -e
+  apacheconftest`` can be used to run those specific Apache conf tests.
+
+- ``tox -e py27``, ``tox -e py26`` etc, run unit tests for specific Python
+  versions.
 
 - ``tox -e cover`` checks the test coverage only. Calling the
   ``./tox.cover.sh`` script directly (or even ``./tox.cover.sh $pkg1
@@ -151,7 +157,7 @@ certificate for some domain name by solving challenges received from
 the ACME server. From the protocol, there are essentially two
 different types of challenges. Challenges that must be solved by
 individual plugins in order to satisfy domain validation (subclasses
-of `~.DVChallenge`, i.e. `~.challenges.DVSNI`,
+of `~.DVChallenge`, i.e. `~.challenges.TLSSNI01`,
 `~.challenges.HTTP01`, `~.challenges.DNS`) and continuity specific
 challenges (subclasses of `~.ContinuityChallenge`,
 i.e. `~.challenges.RecoveryToken`, `~.challenges.RecoveryContact`,
@@ -160,7 +166,7 @@ always handled by the `~.ContinuityAuthenticator`, while plugins are
 expected to handle `~.DVChallenge` types.
 Right now, we have two authenticator plugins, the `~.ApacheConfigurator`
 and the `~.StandaloneAuthenticator`. The Standalone and Apache
-authenticators only solve the `~.challenges.DVSNI` challenge currently.
+authenticators only solve the `~.challenges.TLSSNI01` challenge currently.
 (You can set which challenges your authenticator can handle through the
 :meth:`~.IAuthenticator.get_chall_pref`.
 
@@ -280,8 +286,14 @@ Steps:
 4. Run ``tox -e lint`` to check for pylint errors. Fix any errors.
 5. Run ``tox`` to run the entire test suite including coverage. Fix any errors.
 6. If your code touches communication with an ACME server/Boulder, you
-   should run the integration tests, see `integration`_.
+   should run the integration tests, see `integration`_. See `Known Issues`_
+   for some common failures that have nothing to do with your code.
 7. Submit the PR.
+8. Did your tests pass on Travis? If they didn't, it might not be your fault!
+   See `Known Issues`_. If it's not a known issue, fix any errors.
+
+.. _Known Issues:
+  https://github.com/letsencrypt/letsencrypt/wiki/Known-issues
 
 Updating the documentation
 ==========================
@@ -359,10 +371,12 @@ are provided here mainly for the :ref:`developers <hacking>` reference.
 In general:
 
 * ``sudo`` is required as a suggested way of running privileged process
+* `Python`_ 2.6/2.7 is required
 * `Augeas`_ is required for the Python bindings
 * ``virtualenv`` and ``pip`` are used for managing other python library
   dependencies
 
+.. _Python: https://wiki.python.org/moin/BeginnersGuide/Download
 .. _Augeas: http://augeas.net/
 .. _Virtualenv: https://virtualenv.pypa.io
 

@@ -13,7 +13,7 @@ from acme import other
 from acme import test_util
 
 
-CERT = test_util.load_cert('cert.pem')
+CERT = test_util.load_comparable_cert('cert.pem')
 KEY = jose.JWKRSA(key=test_util.load_rsa_private_key('rsa512_key.pem'))
 
 
@@ -73,7 +73,8 @@ class KeyAuthorizationChallengeResponseTest(unittest.TestCase):
     def test_verify_wrong_form(self):
         from acme.challenges import KeyAuthorizationChallengeResponse
         response = KeyAuthorizationChallengeResponse(
-            key_authorization='.foo.oKGqedy-b-acd5eoybm2f-NVFxvyOoET5CNy3xnv8WY')
+            key_authorization='.foo.oKGqedy-b-acd5eoybm2f-'
+            'NVFxvyOoET5CNy3xnv8WY')
         self.assertFalse(response.verify(self.chall, KEY.public_key()))
 
 
@@ -92,7 +93,6 @@ class HTTP01ResponseTest(unittest.TestCase):
         from acme.challenges import HTTP01
         self.chall = HTTP01(token=(b'x' * 16))
         self.response = self.chall.response(KEY)
-        self.good_headers = {'Content-Type': HTTP01.CONTENT_TYPE}
 
     def test_to_partial_json(self):
         self.assertEqual(self.jmsg, self.msg.to_partial_json())
@@ -113,24 +113,26 @@ class HTTP01ResponseTest(unittest.TestCase):
     @mock.patch("acme.challenges.requests.get")
     def test_simple_verify_good_validation(self, mock_get):
         validation = self.chall.validation(KEY)
-        mock_get.return_value = mock.MagicMock(
-            text=validation, headers=self.good_headers)
+        mock_get.return_value = mock.MagicMock(text=validation)
         self.assertTrue(self.response.simple_verify(
             self.chall, "local", KEY.public_key()))
         mock_get.assert_called_once_with(self.chall.uri("local"))
 
     @mock.patch("acme.challenges.requests.get")
     def test_simple_verify_bad_validation(self, mock_get):
-        mock_get.return_value = mock.MagicMock(
-            text="!", headers=self.good_headers)
+        mock_get.return_value = mock.MagicMock(text="!")
         self.assertFalse(self.response.simple_verify(
             self.chall, "local", KEY.public_key()))
 
     @mock.patch("acme.challenges.requests.get")
-    def test_simple_verify_bad_content_type(self, mock_get):
-        mock_get().text = self.chall.token
-        self.assertFalse(self.response.simple_verify(
+    def test_simple_verify_whitespace_validation(self, mock_get):
+        from acme.challenges import HTTP01Response
+        mock_get.return_value = mock.MagicMock(
+            text=(self.chall.validation(KEY) +
+                  HTTP01Response.WHITESPACE_CUTSET))
+        self.assertTrue(self.response.simple_verify(
             self.chall, "local", KEY.public_key()))
+        mock_get.assert_called_once_with(self.chall.uri("local"))
 
     @mock.patch("acme.challenges.requests.get")
     def test_simple_verify_connection_error(self, mock_get):
@@ -186,14 +188,114 @@ class HTTP01Test(unittest.TestCase):
             self.msg.update(token=b'..').good_token)
 
 
-class DVSNITest(unittest.TestCase):
+class TLSSNI01ResponseTest(unittest.TestCase):
+    # pylint: disable=too-many-instance-attributes
 
     def setUp(self):
-        from acme.challenges import DVSNI
-        self.msg = DVSNI(
+        from acme.challenges import TLSSNI01
+        self.chall = TLSSNI01(
+            token=jose.b64decode(b'a82d5ff8ef740d12881f6d3c2277ab2e'))
+
+        self.response = self.chall.response(KEY)
+        self.jmsg = {
+            'resource': 'challenge',
+            'type': 'tls-sni-01',
+            'keyAuthorization': self.response.key_authorization,
+        }
+
+        # pylint: disable=invalid-name
+        label1 = b'dc38d9c3fa1a4fdcc3a5501f2d38583f'
+        label2 = b'b7793728f084394f2a1afd459556bb5c'
+        self.z = label1 + label2
+        self.z_domain = label1 + b'.' + label2 + b'.acme.invalid'
+        self.domain = 'foo.com'
+
+    def test_z_and_domain(self):
+        self.assertEqual(self.z, self.response.z)
+        self.assertEqual(self.z_domain, self.response.z_domain)
+
+    def test_to_partial_json(self):
+        self.assertEqual(self.jmsg, self.response.to_partial_json())
+
+    def test_from_json(self):
+        from acme.challenges import TLSSNI01Response
+        self.assertEqual(self.response, TLSSNI01Response.from_json(self.jmsg))
+
+    def test_from_json_hashable(self):
+        from acme.challenges import TLSSNI01Response
+        hash(TLSSNI01Response.from_json(self.jmsg))
+
+    @mock.patch('acme.challenges.socket.gethostbyname')
+    @mock.patch('acme.challenges.crypto_util.probe_sni')
+    def test_probe_cert(self, mock_probe_sni, mock_gethostbyname):
+        mock_gethostbyname.return_value = '127.0.0.1'
+        self.response.probe_cert('foo.com')
+        mock_gethostbyname.assert_called_once_with('foo.com')
+        mock_probe_sni.assert_called_once_with(
+            host='127.0.0.1', port=self.response.PORT,
+            name=self.z_domain)
+
+        self.response.probe_cert('foo.com', host='8.8.8.8')
+        mock_probe_sni.assert_called_with(
+            host='8.8.8.8', port=mock.ANY, name=mock.ANY)
+
+        self.response.probe_cert('foo.com', port=1234)
+        mock_probe_sni.assert_called_with(
+            host=mock.ANY, port=1234, name=mock.ANY)
+
+        self.response.probe_cert('foo.com', bar='baz')
+        mock_probe_sni.assert_called_with(
+            host=mock.ANY, port=mock.ANY, name=mock.ANY, bar='baz')
+
+        self.response.probe_cert('foo.com', name=b'xxx')
+        mock_probe_sni.assert_called_with(
+            host=mock.ANY, port=mock.ANY,
+            name=self.z_domain)
+
+    def test_gen_verify_cert(self):
+        key1 = test_util.load_pyopenssl_private_key('rsa512_key.pem')
+        cert, key2 = self.response.gen_cert(key1)
+        self.assertEqual(key1, key2)
+        self.assertTrue(self.response.verify_cert(cert))
+
+    def test_gen_verify_cert_gen_key(self):
+        cert, key = self.response.gen_cert()
+        self.assertTrue(isinstance(key, OpenSSL.crypto.PKey))
+        self.assertTrue(self.response.verify_cert(cert))
+
+    def test_verify_bad_cert(self):
+        self.assertFalse(self.response.verify_cert(
+            test_util.load_cert('cert.pem')))
+
+    def test_simple_verify_bad_key_authorization(self):
+        key2 = jose.JWKRSA.load(test_util.load_vector('rsa256_key.pem'))
+        self.response.simple_verify(self.chall, "local", key2.public_key())
+
+    @mock.patch('acme.challenges.TLSSNI01Response.verify_cert', autospec=True)
+    def test_simple_verify(self, mock_verify_cert):
+        mock_verify_cert.return_value = mock.sentinel.verification
+        self.assertEqual(
+            mock.sentinel.verification, self.response.simple_verify(
+                self.chall, self.domain, KEY.public_key(),
+                cert=mock.sentinel.cert))
+        mock_verify_cert.assert_called_once_with(
+            self.response, mock.sentinel.cert)
+
+    @mock.patch('acme.challenges.TLSSNI01Response.probe_cert')
+    def test_simple_verify_false_on_probe_error(self, mock_probe_cert):
+        mock_probe_cert.side_effect = errors.Error
+        self.assertFalse(self.response.simple_verify(
+            self.chall, self.domain, KEY.public_key()))
+
+
+class TLSSNI01Test(unittest.TestCase):
+
+    def setUp(self):
+        from acme.challenges import TLSSNI01
+        self.msg = TLSSNI01(
             token=jose.b64decode('a82d5ff8ef740d12881f6d3c2277ab2e'))
         self.jmsg = {
-            'type': 'dvsni',
+            'type': 'tls-sni-01',
             'token': 'a82d5ff8ef740d12881f6d3c2277ab2e',
         }
 
@@ -201,144 +303,25 @@ class DVSNITest(unittest.TestCase):
         self.assertEqual(self.jmsg, self.msg.to_partial_json())
 
     def test_from_json(self):
-        from acme.challenges import DVSNI
-        self.assertEqual(self.msg, DVSNI.from_json(self.jmsg))
+        from acme.challenges import TLSSNI01
+        self.assertEqual(self.msg, TLSSNI01.from_json(self.jmsg))
 
     def test_from_json_hashable(self):
-        from acme.challenges import DVSNI
-        hash(DVSNI.from_json(self.jmsg))
+        from acme.challenges import TLSSNI01
+        hash(TLSSNI01.from_json(self.jmsg))
 
     def test_from_json_invalid_token_length(self):
-        from acme.challenges import DVSNI
+        from acme.challenges import TLSSNI01
         self.jmsg['token'] = jose.encode_b64jose(b'abcd')
         self.assertRaises(
-            jose.DeserializationError, DVSNI.from_json, self.jmsg)
+            jose.DeserializationError, TLSSNI01.from_json, self.jmsg)
 
-    def test_gen_response(self):
-        from acme.challenges import DVSNI
-        self.assertEqual(self.msg, DVSNI.json_loads(
-            self.msg.gen_response(KEY).validation.payload.decode()))
-
-
-class DVSNIResponseTest(unittest.TestCase):
-    # pylint: disable=too-many-instance-attributes
-
-    def setUp(self):
-        from acme.challenges import DVSNI
-        self.chall = DVSNI(
-            token=jose.b64decode(b'a82d5ff8ef740d12881f6d3c2277ab2e'))
-
-        from acme.challenges import DVSNIResponse
-        self.validation = jose.JWS.sign(
-            payload=self.chall.json_dumps(sort_keys=True).encode(),
-            key=KEY, alg=jose.RS256)
-        self.msg = DVSNIResponse(validation=self.validation)
-        self.jmsg_to = {
-            'resource': 'challenge',
-            'type': 'dvsni',
-            'validation': self.validation,
-        }
-        self.jmsg_from = {
-            'resource': 'challenge',
-            'type': 'dvsni',
-            'validation': self.validation.to_json(),
-        }
-
-        # pylint: disable=invalid-name
-        label1 = b'e2df3498860637c667fedadc5a8494ec'
-        label2 = b'09dcc75553c9b3bd73662b50e71b1e42'
-        self.z = label1 + label2
-        self.z_domain = label1 + b'.' + label2 + b'.acme.invalid'
-        self.domain = 'foo.com'
-
-    def test_z_and_domain(self):
-        self.assertEqual(self.z, self.msg.z)
-        self.assertEqual(self.z_domain, self.msg.z_domain)
-
-    def test_to_partial_json(self):
-        self.assertEqual(self.jmsg_to, self.msg.to_partial_json())
-
-    def test_from_json(self):
-        from acme.challenges import DVSNIResponse
-        self.assertEqual(self.msg, DVSNIResponse.from_json(self.jmsg_from))
-
-    def test_from_json_hashable(self):
-        from acme.challenges import DVSNIResponse
-        hash(DVSNIResponse.from_json(self.jmsg_from))
-
-    @mock.patch('acme.challenges.socket.gethostbyname')
-    @mock.patch('acme.challenges.crypto_util.probe_sni')
-    def test_probe_cert(self, mock_probe_sni, mock_gethostbyname):
-        mock_gethostbyname.return_value = '127.0.0.1'
-        self.msg.probe_cert('foo.com')
-        mock_gethostbyname.assert_called_once_with('foo.com')
-        mock_probe_sni.assert_called_once_with(
-            host='127.0.0.1', port=self.msg.PORT,
-            name=self.z_domain)
-
-        self.msg.probe_cert('foo.com', host='8.8.8.8')
-        mock_probe_sni.assert_called_with(
-            host='8.8.8.8', port=mock.ANY, name=mock.ANY)
-
-        self.msg.probe_cert('foo.com', port=1234)
-        mock_probe_sni.assert_called_with(
-            host=mock.ANY, port=1234, name=mock.ANY)
-
-        self.msg.probe_cert('foo.com', bar='baz')
-        mock_probe_sni.assert_called_with(
-            host=mock.ANY, port=mock.ANY, name=mock.ANY, bar='baz')
-
-        self.msg.probe_cert('foo.com', name=b'xxx')
-        mock_probe_sni.assert_called_with(
-            host=mock.ANY, port=mock.ANY,
-            name=self.z_domain)
-
-    def test_gen_verify_cert(self):
-        key1 = test_util.load_pyopenssl_private_key('rsa512_key.pem')
-        cert, key2 = self.msg.gen_cert(key1)
-        self.assertEqual(key1, key2)
-        self.assertTrue(self.msg.verify_cert(cert))
-
-    def test_gen_verify_cert_gen_key(self):
-        cert, key = self.msg.gen_cert()
-        self.assertTrue(isinstance(key, OpenSSL.crypto.PKey))
-        self.assertTrue(self.msg.verify_cert(cert))
-
-    def test_verify_bad_cert(self):
-        self.assertFalse(self.msg.verify_cert(test_util.load_cert('cert.pem')))
-
-    def test_simple_verify_wrong_account_key(self):
-        self.assertFalse(self.msg.simple_verify(
-            self.chall, self.domain, jose.JWKRSA.load(
-                test_util.load_vector('rsa256_key.pem')).public_key()))
-
-    def test_simple_verify_wrong_payload(self):
-        for payload in b'', b'{}':
-            msg = self.msg.update(validation=jose.JWS.sign(
-                payload=payload, key=KEY, alg=jose.RS256))
-            self.assertFalse(msg.simple_verify(
-                self.chall, self.domain, KEY.public_key()))
-
-    def test_simple_verify_wrong_token(self):
-        msg = self.msg.update(validation=jose.JWS.sign(
-            payload=self.chall.update(token=(b'b' * 20)).json_dumps().encode(),
-            key=KEY, alg=jose.RS256))
-        self.assertFalse(msg.simple_verify(
-            self.chall, self.domain, KEY.public_key()))
-
-    @mock.patch('acme.challenges.DVSNIResponse.verify_cert', autospec=True)
-    def test_simple_verify(self, mock_verify_cert):
-        mock_verify_cert.return_value = mock.sentinel.verification
-        self.assertEqual(mock.sentinel.verification, self.msg.simple_verify(
-            self.chall, self.domain, KEY.public_key(),
-            cert=mock.sentinel.cert))
-        mock_verify_cert.assert_called_once_with(self.msg, mock.sentinel.cert)
-
-    @mock.patch('acme.challenges.DVSNIResponse.probe_cert')
-    def test_simple_verify_false_on_probe_error(self, mock_probe_cert):
-        mock_probe_cert.side_effect = errors.Error
-        self.assertFalse(self.msg.simple_verify(
-            self.chall, self.domain, KEY.public_key()))
+    @mock.patch('acme.challenges.TLSSNI01Response.gen_cert')
+    def test_validation(self, mock_gen_cert):
+        mock_gen_cert.return_value = ('cert', 'key')
+        self.assertEqual(('cert', 'key'), self.msg.validation(
+            KEY, cert_key=mock.sentinel.cert_key))
+        mock_gen_cert.assert_called_once_with(key=mock.sentinel.cert_key)
 
 
 class RecoveryContactTest(unittest.TestCase):
@@ -441,7 +424,7 @@ class ProofOfPossessionHintsTest(unittest.TestCase):
             'jwk': jwk,
             'certFingerprints': cert_fingerprints,
             'certs': (jose.encode_b64jose(OpenSSL.crypto.dump_certificate(
-                OpenSSL.crypto.FILETYPE_ASN1, CERT)),),
+                OpenSSL.crypto.FILETYPE_ASN1, CERT.wrapped)),),
             'subjectKeyIdentifiers': subject_key_identifiers,
             'serialNumbers': serial_numbers,
             'issuers': issuers,
@@ -571,8 +554,6 @@ class ProofOfPossessionResponseTest(unittest.TestCase):
 class DNSTest(unittest.TestCase):
 
     def setUp(self):
-        self.account_key = jose.JWKRSA.load(
-            test_util.load_vector('rsa512_key.pem'))
         from acme.challenges import DNS
         self.msg = DNS(token=jose.b64decode(
             b'evaGxfADs6pSRb2LAv9IZf17Dt3juxGJ-PCt92wr-oA'))
@@ -594,34 +575,34 @@ class DNSTest(unittest.TestCase):
 
     def test_gen_check_validation(self):
         self.assertTrue(self.msg.check_validation(
-            self.msg.gen_validation(self.account_key),
-            self.account_key.public_key()))
+            self.msg.gen_validation(KEY), KEY.public_key()))
 
     def test_gen_check_validation_wrong_key(self):
         key2 = jose.JWKRSA.load(test_util.load_vector('rsa1024_key.pem'))
         self.assertFalse(self.msg.check_validation(
-            self.msg.gen_validation(self.account_key), key2.public_key()))
+            self.msg.gen_validation(KEY), key2.public_key()))
 
     def test_check_validation_wrong_payload(self):
         validations = tuple(
-            jose.JWS.sign(payload=payload, alg=jose.RS256, key=self.account_key)
+            jose.JWS.sign(payload=payload, alg=jose.RS256, key=KEY)
             for payload in (b'', b'{}')
         )
         for validation in validations:
             self.assertFalse(self.msg.check_validation(
-                validation, self.account_key.public_key()))
+                validation, KEY.public_key()))
 
     def test_check_validation_wrong_fields(self):
         bad_validation = jose.JWS.sign(
-            payload=self.msg.update(token=b'x' * 20).json_dumps().encode('utf-8'),
-            alg=jose.RS256, key=self.account_key)
+            payload=self.msg.update(
+                token=b'x' * 20).json_dumps().encode('utf-8'),
+            alg=jose.RS256, key=KEY)
         self.assertFalse(self.msg.check_validation(
-            bad_validation, self.account_key.public_key()))
+            bad_validation, KEY.public_key()))
 
     def test_gen_response(self):
         with mock.patch('acme.challenges.DNS.gen_validation') as mock_gen:
             mock_gen.return_value = mock.sentinel.validation
-            response = self.msg.gen_response(self.account_key)
+            response = self.msg.gen_response(KEY)
         from acme.challenges import DNSResponse
         self.assertTrue(isinstance(response, DNSResponse))
         self.assertEqual(response.validation, mock.sentinel.validation)
